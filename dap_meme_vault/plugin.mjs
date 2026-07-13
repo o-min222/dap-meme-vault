@@ -2,6 +2,8 @@
 
 const ITEMS_KEY = "memes-v1";
 const RECENT_LIMIT = 20;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_FILES = 20;
 
 function cleanText(value, max = 80) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, max);
@@ -17,6 +19,22 @@ export function queryFromUtterance(value) {
     .replace(/(짤|밈|meme|저장소|보관함|찾아\s*줘|찾아줘|보여\s*줘|보여줘|열어\s*줘|열어줘)/giu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function detectImageMime(bytes) {
+  if (!(bytes instanceof Uint8Array)) return null;
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)).match(/^GIF8[79]a$/u)) return "image/gif";
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
+  return null;
+}
+
+function fileBytes(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return null;
 }
 
 function normalizeItems(value) {
@@ -53,7 +71,9 @@ export function activate(ctx) {
   }
 
   function enqueue(task) {
-    mutation = mutation.then(task, task);
+    mutation = mutation.then(task, task).catch((error) => {
+      notice(`처리하지 못했어요: ${error instanceof Error ? error.message : String(error)}`, "error");
+    });
     return mutation;
   }
 
@@ -118,6 +138,42 @@ export function activate(ctx) {
     await pushState();
   }
 
+  async function addFiles(files) {
+    if (!Array.isArray(files) || !files.length) return;
+    const items = await readItems();
+    const known = new Set(items.map((item) => item.blobId));
+    let added = 0;
+    let skipped = 0;
+    for (const file of files.slice(0, MAX_FILES)) {
+      const bytes = fileBytes(file?.bytes);
+      const mime = bytes && bytes.byteLength <= MAX_FILE_BYTES ? detectImageMime(bytes) : null;
+      if (!bytes || !mime) {
+        skipped += 1;
+        continue;
+      }
+      const name = cleanText(file?.name, 120) || `image-${Date.now()}`;
+      const blobId = await storage.putBlob(bytes, { mime, name });
+      if (known.has(blobId)) {
+        skipped += 1;
+        continue;
+      }
+      known.add(blobId);
+      items.unshift({
+        id: blobId,
+        blobId,
+        title: cleanText(name.replace(/\.[^.]+$/u, "")) || `새 짤 ${items.length + 1}`,
+        tags: [],
+        createdAt: Date.now(),
+        usedAt: 0,
+        useCount: 0,
+      });
+      added += 1;
+    }
+    if (added) await writeItems(items);
+    await pushState();
+    notice(added ? `${added}개 파일을 저장했어요${skipped ? ` (${skipped}개 제외)` : ""}.` : "새로 저장할 이미지가 없어요.", added ? "success" : "error");
+  }
+
   async function editItem(id, title, tags) {
     const items = await readItems();
     const item = items.find((candidate) => candidate.id === id);
@@ -173,6 +229,7 @@ export function activate(ctx) {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "ready" || msg.type === "refresh") void pushState();
       if (msg.type === "addLatest") void enqueue(() => addLatest(msg.title, msg.tags));
+      if (msg.type === "addFiles") void enqueue(() => addFiles(msg.files));
       if (msg.type === "edit") void enqueue(() => editItem(msg.id, msg.title, msg.tags));
       if (msg.type === "delete") void enqueue(() => deleteItem(msg.id));
       if (msg.type === "paste") void enqueue(() => pasteItem(msg.id));
