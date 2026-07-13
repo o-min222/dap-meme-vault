@@ -17,7 +17,8 @@
       #titlebar button { margin-left:auto; -webkit-app-region:no-drag; }
       .icon-btn { border:0; background:transparent; border-radius:7px; padding:5px 8px; cursor:pointer; }
       .icon-btn:hover { background:var(--panel); }
-      #tools { display:grid; grid-template-columns:1fr auto auto auto; gap:7px; padding:10px; }
+      #tools { display:grid; grid-template-columns:1fr auto auto; gap:7px; padding:10px; }
+      #search { grid-column:1/-1; }
       input { min-width:0; width:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); padding:8px 10px; outline:none; }
       input:focus { border-color:var(--accent); }
       .primary { border:0; border-radius:8px; background:var(--accent); color:#23180a; font-weight:700; padding:8px 11px; cursor:pointer; }
@@ -104,7 +105,7 @@
         document.getElementById("count").textContent = `${visible.length}/${items.length}개`;
         if (!visible.length) {
           const empty = document.createElement("div"); empty.className = "empty";
-          empty.textContent = items.length ? "검색에 맞는 짤이 없어요." : "이미지를 복사하고 ‘+ 저장’을 눌러 첫 짤을 모아보세요.";
+          empty.textContent = items.length ? "검색에 맞는 짤이 없어요." : "파일을 선택하거나 클립보드에서 첫 짤을 저장해 보세요.";
           list.append(empty); return;
         }
         for (const item of visible) {
