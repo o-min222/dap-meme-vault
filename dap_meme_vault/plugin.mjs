@@ -3,7 +3,6 @@
 const ITEMS_KEY = "memes-v1";
 const RECENT_LIMIT = 20;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
-const MAX_FILES = 20;
 
 function cleanText(value, max = 80) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, max);
@@ -138,40 +137,36 @@ export function activate(ctx) {
     await pushState();
   }
 
-  async function addFiles(files) {
-    if (!Array.isArray(files) || !files.length) return;
+  async function addFile(file, title, tags) {
+    if (!file || typeof file !== "object") return;
+    const bytes = fileBytes(file.bytes);
+    const mime = bytes && bytes.byteLength <= MAX_FILE_BYTES ? detectImageMime(bytes) : null;
+    if (!bytes || !mime) {
+      notice("PNG·JPEG·GIF·WebP 이미지(20MB 이하)만 저장할 수 있어요.", "error");
+      return;
+    }
+    const name = cleanText(file.name, 120) || `image-${Date.now()}`;
+    const blobId = await storage.putBlob(bytes, { mime, name });
     const items = await readItems();
-    const known = new Set(items.map((item) => item.blobId));
-    let added = 0;
-    let skipped = 0;
-    for (const file of files.slice(0, MAX_FILES)) {
-      const bytes = fileBytes(file?.bytes);
-      const mime = bytes && bytes.byteLength <= MAX_FILE_BYTES ? detectImageMime(bytes) : null;
-      if (!bytes || !mime) {
-        skipped += 1;
-        continue;
-      }
-      const name = cleanText(file?.name, 120) || `image-${Date.now()}`;
-      const blobId = await storage.putBlob(bytes, { mime, name });
-      if (known.has(blobId)) {
-        skipped += 1;
-        continue;
-      }
-      known.add(blobId);
+    const existing = items.find((item) => item.blobId === blobId);
+    if (existing) {
+      existing.title = cleanText(title) || existing.title;
+      existing.tags = parseTags(tags).length ? parseTags(tags) : existing.tags;
+      notice("이미 저장된 짤이라 정보를 갱신했어요.");
+    } else {
       items.unshift({
         id: blobId,
         blobId,
-        title: cleanText(name.replace(/\.[^.]+$/u, "")) || `새 짤 ${items.length + 1}`,
-        tags: [],
+        title: cleanText(title) || cleanText(name.replace(/\.[^.]+$/u, "")) || `새 짤 ${items.length + 1}`,
+        tags: parseTags(tags),
         createdAt: Date.now(),
         usedAt: 0,
         useCount: 0,
       });
-      added += 1;
+      notice("짤을 저장했어요.", "success");
     }
-    if (added) await writeItems(items);
+    await writeItems(items);
     await pushState();
-    notice(added ? `${added}개 파일을 저장했어요${skipped ? ` (${skipped}개 제외)` : ""}.` : "새로 저장할 이미지가 없어요.", added ? "success" : "error");
   }
 
   async function editItem(id, title, tags) {
@@ -229,7 +224,7 @@ export function activate(ctx) {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "ready" || msg.type === "refresh") void pushState();
       if (msg.type === "addLatest") void enqueue(() => addLatest(msg.title, msg.tags));
-      if (msg.type === "addFiles") void enqueue(() => addFiles(msg.files));
+      if (msg.type === "addFile") void enqueue(() => addFile(msg.file, msg.title, msg.tags));
       if (msg.type === "edit") void enqueue(() => editItem(msg.id, msg.title, msg.tags));
       if (msg.type === "delete") void enqueue(() => deleteItem(msg.id));
       if (msg.type === "paste") void enqueue(() => pasteItem(msg.id));
