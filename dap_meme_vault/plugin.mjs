@@ -1,7 +1,6 @@
 /** Meme Vault — persistent, searchable image snippets for DAP. Zero external imports. */
 
 const ITEMS_KEY = "memes-v1";
-const RECENT_LIMIT = 20;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 function cleanText(value, max = 80) {
@@ -52,7 +51,6 @@ function normalizeItems(value) {
 }
 
 export function activate(ctx) {
-  const history = ctx.host.clipboardHistory;
   const storage = ctx.host.storage;
   const windows = ctx.host.windows;
   const paste = ctx.host.paste;
@@ -99,42 +97,6 @@ export function activate(ctx) {
 
   function notice(message, tone = "info") {
     if (usablePalette()) palette.postMessage({ type: "notice", message, tone });
-  }
-
-  async function addLatest(title, tags) {
-    const recent = await history.list({ limit: RECENT_LIMIT, kind: "image" });
-    const latest = recent[0];
-    if (!latest) {
-      notice("최근 이미지가 없어요. 이미지를 복사한 뒤 다시 저장해 주세요.", "error");
-      return;
-    }
-    const full = await history.get(latest.id);
-    if (!full?.imageBytes) {
-      notice("이미지 원본을 읽지 못했어요.", "error");
-      return;
-    }
-    const blobId = await storage.putBlob(full.imageBytes, { mime: "image/png", name: `${latest.id}.png` });
-    const items = await readItems();
-    const existing = items.find((item) => item.blobId === blobId);
-    if (existing) {
-      existing.title = cleanText(title) || existing.title;
-      existing.tags = parseTags(tags).length ? parseTags(tags) : existing.tags;
-      await writeItems(items);
-      notice("이미 저장된 짤이라 정보를 갱신했어요.");
-    } else {
-      items.unshift({
-        id: blobId,
-        blobId,
-        title: cleanText(title) || `새 짤 ${items.length + 1}`,
-        tags: parseTags(tags),
-        createdAt: Date.now(),
-        usedAt: 0,
-        useCount: 0,
-      });
-      await writeItems(items);
-      notice("짤을 저장했어요.", "success");
-    }
-    await pushState();
   }
 
   async function addFile(file, title, tags) {
@@ -198,6 +160,7 @@ export function activate(ctx) {
     item.usedAt = Date.now();
     item.useCount += 1;
     await writeItems(items);
+    await pushState();
     if (usablePalette()) palette.postMessage({ type: "pasted", id });
   }
 
@@ -223,7 +186,6 @@ export function activate(ctx) {
     palette.onMessage((msg) => {
       if (!msg || typeof msg !== "object") return;
       if (msg.type === "ready" || msg.type === "refresh") void pushState();
-      if (msg.type === "addLatest") void enqueue(() => addLatest(msg.title, msg.tags));
       if (msg.type === "addFile") void enqueue(() => addFile(msg.file, msg.title, msg.tags));
       if (msg.type === "edit") void enqueue(() => editItem(msg.id, msg.title, msg.tags));
       if (msg.type === "delete") void enqueue(() => deleteItem(msg.id));
