@@ -17,7 +17,7 @@
       #titlebar button { margin-left:auto; -webkit-app-region:no-drag; }
       .icon-btn { border:0; background:transparent; border-radius:7px; padding:5px 8px; cursor:pointer; }
       .icon-btn:hover { background:var(--panel); }
-      #tools { display:grid; grid-template-columns:1fr auto auto; gap:7px; padding:10px; }
+      #tools { display:grid; grid-template-columns:1fr auto; gap:7px; padding:10px; }
       input { min-width:0; width:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); padding:8px 10px; outline:none; }
       input:focus { border-color:var(--accent); }
       .primary { border:0; border-radius:8px; background:var(--accent); color:#23180a; font-weight:700; padding:8px 11px; cursor:pointer; }
@@ -44,6 +44,15 @@
       form { padding:16px; }
       form h2 { margin:0 0 12px; font-size:16px; }
       label { display:block; color:var(--muted); margin:9px 0 5px; }
+      .attachment { min-height:132px; display:grid; place-items:center; border:1px dashed #555b68; border-radius:10px; background:#1c1e22; padding:10px; text-align:center; }
+      .attachment strong { display:block; margin-bottom:4px; }
+      .attachment .hint { color:var(--muted); font-size:12px; }
+      .link-btn { border:0; background:transparent; color:var(--accent); padding:0 2px; cursor:pointer; text-decoration:underline; text-underline-offset:2px; }
+      #attachmentPreview { width:100%; display:grid; grid-template-columns:96px 1fr; gap:10px; align-items:center; text-align:left; }
+      #attachmentPreview[hidden], #attachmentEmpty[hidden] { display:none; }
+      #previewImage { width:96px; height:96px; border-radius:8px; object-fit:cover; background:#0d0e10; }
+      #attachmentName { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+      button:disabled { cursor:not-allowed; opacity:.45; }
       .form-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:14px; }
       #list::-webkit-scrollbar { width:8px; } #list::-webkit-scrollbar-thumb { background:var(--line); border-radius:8px; }
     </style>
@@ -52,8 +61,7 @@
     <header id="titlebar"><strong>짤 저장소</strong><span class="sub">클릭 붙여넣기 · 드래그 첨부</span><button class="icon-btn" id="close" aria-label="닫기">✕</button></header>
     <section id="tools">
       <input id="search" type="search" placeholder="제목이나 태그 검색 (예: 축하, 퇴근)" autocomplete="off" />
-      <button class="secondary" id="random" title="검색 결과에서 하나 고르기">랜덤</button>
-      <button class="primary" id="add">+ 저장</button>
+      <button class="primary" id="add">+ 짤 추가</button>
     </section>
     <main id="list"></main>
     <footer><span id="count">0개</span><span id="usage">0 MB</span></footer>
@@ -61,6 +69,20 @@
     <dialog id="editor">
       <form method="dialog">
         <h2 id="editorTitle">짤 저장</h2>
+        <section id="attachmentSection">
+          <label>이미지</label>
+          <div class="attachment" id="attachment">
+            <div id="attachmentEmpty">
+              <strong>이미지를 붙여넣으세요</strong>
+              <div class="hint"><kbd>Ctrl+V</kbd> 또는 <button class="link-btn" id="chooseFile" type="button">파일 선택</button></div>
+            </div>
+            <div id="attachmentPreview" hidden>
+              <img id="previewImage" alt="첨부 이미지 미리보기" />
+              <div><strong id="attachmentName"></strong><button class="link-btn" id="removeAttachment" type="button">다시 선택</button></div>
+            </div>
+          </div>
+          <input id="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp" hidden />
+        </section>
         <label for="name">이름</label><input id="name" maxlength="80" placeholder="예: 완전 축하해" />
         <label for="tags">태그</label><input id="tags" maxlength="200" placeholder="축하, 박수, 성공" />
         <div class="form-actions"><button class="secondary" value="cancel">취소</button><button class="primary" id="save" value="default">저장</button></div>
@@ -73,9 +95,18 @@
       const editor = document.getElementById("editor");
       const nameInput = document.getElementById("name");
       const tagsInput = document.getElementById("tags");
+      const attachmentSection = document.getElementById("attachmentSection");
+      const attachmentEmpty = document.getElementById("attachmentEmpty");
+      const attachmentPreview = document.getElementById("attachmentPreview");
+      const previewImage = document.getElementById("previewImage");
+      const attachmentName = document.getElementById("attachmentName");
+      const chooseFile = document.getElementById("chooseFile");
+      const fileInput = document.getElementById("fileInput");
+      const saveButton = document.getElementById("save");
       const toast = document.getElementById("toast");
       let items = [];
       let editingId = null;
+      let selectedFile = null;
       let toastTimer = 0;
 
       const text = (value) => String(value || "");
@@ -101,7 +132,7 @@
         document.getElementById("count").textContent = `${visible.length}/${items.length}개`;
         if (!visible.length) {
           const empty = document.createElement("div"); empty.className = "empty";
-          empty.textContent = items.length ? "검색에 맞는 짤이 없어요." : "이미지를 복사하고 ‘+ 저장’을 눌러 첫 짤을 모아보세요.";
+          empty.textContent = items.length ? "검색에 맞는 짤이 없어요." : "‘+ 짤 추가’로 첫 짤을 저장해 보세요.";
           list.append(empty); return;
         }
         for (const item of visible) {
@@ -121,22 +152,61 @@
       }
       function openEditor(item = null) {
         editingId = item?.id || null;
-        document.getElementById("editorTitle").textContent = item ? "짤 정보 수정" : "최근 복사한 이미지 저장";
+        selectedFile = null;
+        attachmentSection.hidden = !!item;
+        attachmentEmpty.hidden = false;
+        attachmentPreview.hidden = true;
+        previewImage.removeAttribute("src");
+        saveButton.disabled = !item;
+        document.getElementById("editorTitle").textContent = item ? "짤 정보 수정" : "짤 추가";
         nameInput.value = item?.title || "";
         tagsInput.value = item?.tags?.join(", ") || "";
         editor.showModal(); setTimeout(() => nameInput.focus(), 0);
       }
+      function attachFile(file, pasted = false) {
+        if (!file || !file.type.startsWith("image/")) return showToast("이미지만 첨부할 수 있어요.", "error");
+        if (file.size > 20 * 1024 * 1024) return showToast(`${file.name || "이미지"}: 20MB를 넘어요.`, "error");
+        selectedFile = file;
+        attachmentName.textContent = pasted ? "붙여넣은 이미지" : file.name;
+        attachmentEmpty.hidden = true;
+        attachmentPreview.hidden = false;
+        const reader = new FileReader();
+        reader.onload = () => { previewImage.src = reader.result; };
+        reader.readAsDataURL(file);
+        saveButton.disabled = false;
+        if (!pasted && !nameInput.value.trim()) nameInput.value = file.name.replace(/\.[^.]+$/u, "");
+      }
       document.getElementById("add").onclick = () => openEditor();
-      document.getElementById("random").onclick = () => {
-        const candidates = filtered();
-        if (!candidates.length) return showToast("고를 짤이 없어요.", "error");
-        const item = candidates[Math.floor(Math.random() * candidates.length)];
-        search.value = item.title; render(); showToast(`오늘의 선택: ${item.title}`);
+      chooseFile.onclick = () => fileInput.click();
+      fileInput.addEventListener("change", () => {
+        const file = fileInput.files[0];
+        fileInput.value = "";
+        if (file) attachFile(file);
+      });
+      document.getElementById("removeAttachment").onclick = () => {
+        selectedFile = null;
+        attachmentEmpty.hidden = false;
+        attachmentPreview.hidden = true;
+        previewImage.removeAttribute("src");
+        saveButton.disabled = true;
       };
-      document.getElementById("save").addEventListener("click", (event) => {
+      editor.addEventListener("paste", (event) => {
+        if (editingId) return;
+        const item = [...(event.clipboardData?.items || [])].find((candidate) => candidate.kind === "file" && candidate.type.startsWith("image/"));
+        const file = item?.getAsFile();
+        if (!file) return;
+        event.preventDefault();
+        attachFile(file, true);
+      });
+      saveButton.addEventListener("click", async (event) => {
         event.preventDefault();
         const payload = { title:nameInput.value, tags:tagsInput.value };
-        dap.postMessage(editingId ? { type:"edit", id:editingId, ...payload } : { type:"addLatest", ...payload });
+        if (editingId) dap.postMessage({ type:"edit", id:editingId, ...payload });
+        else if (selectedFile) {
+          saveButton.disabled = true;
+          const file = { name:selectedFile.name, bytes:new Uint8Array(await selectedFile.arrayBuffer()) };
+          dap.postMessage({ type:"addFile", file, ...payload });
+        } else return showToast("이미지를 붙여넣거나 파일을 선택해 주세요.", "error");
         editor.close();
       });
       document.getElementById("close").onclick = () => dap.close();

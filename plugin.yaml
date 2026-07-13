@@ -1,13 +1,12 @@
 id: io.github.o-min222.meme_vault
 name: Meme Vault
-version: 0.1.0
+version: 0.4.1
 manifest_version: 2
 entry: dap_meme_vault.plugin:activate
 author: o-min222
 description: 자주 쓰는 짤을 제목과 태그로 보관하고, 상황에 맞게 찾아 붙여넣는 이미지 저장소.
 surface: user
 permissions:
-  - clipboard.history
   - storage.private
   - window.palette
   - input.synthesize
