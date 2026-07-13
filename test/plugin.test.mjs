@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { activate, parseTags, queryFromUtterance } from "../dap_meme_vault/plugin.mjs";
+
+assert.deepEqual(parseTags("축하, 박수 #축하\n성공"), ["축하", "박수", "성공"]);
+assert.equal(queryFromUtterance("축하 짤 찾아줘"), "축하");
+assert.equal(queryFromUtterance("meme 저장소 열어줘"), "");
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const json = new Map();
+const actions = new Map();
+let paletteMessage = null;
+let pasted = null;
+const palettePosts = [];
+const blobId = "a".repeat(64);
+const palette = {
+  destroyed: false,
+  isDestroyed() { return this.destroyed; },
+  close() { this.destroyed = true; },
+  onMessage(callback) { paletteMessage = callback; },
+  postMessage(message) { palettePosts.push(message); },
+};
+const ctx = {
+  host: {
+    clipboardHistory: {
+      async list() { return [{ id: "clip-1", kind: "image" }]; },
+      async get() { return { id: "clip-1", kind: "image", imageBytes: new Uint8Array([1, 2, 3]) }; },
+    },
+    storage: {
+      async getJson(key) { return json.get(key) ?? null; },
+      async setJson(key, value) { json.set(key, structuredClone(value)); },
+      async putBlob() { return blobId; },
+      async blobUrl(id) { return `dap-blob://blob/test/${id}`; },
+      async deleteBlob() {},
+      async usage() { return { jsonKeys: json.size, blobBytes: 3 }; },
+    },
+    windows: { openPalette() { palette.destroyed = false; return palette; } },
+    paste: { async pasteItem(item) { pasted = item; } },
+  },
+  actions: { registerAction(action) { actions.set(action.id, action.callback); } },
+  commands: { addCommand() {} },
+  radialMenu: { addItem() {} },
+  shortcuts: { registerShortcut() {} },
+};
+
+activate(ctx);
+assert.equal(actions.get("findMeme")({ text: "축하 짤 찾아줘" }), "'축하'에 맞는 짤을 열었어!");
+paletteMessage({ type: "ready" });
+await tick();
+assert.equal(palettePosts.at(-1).query, "축하");
+paletteMessage({ type: "addLatest", title: "만세", tags: "축하, 성공" });
+await tick(); await tick();
+assert.equal(json.get("memes-v1")[0].title, "만세");
+paletteMessage({ type: "paste", id: blobId });
+await tick(); await tick();
+assert.deepEqual(pasted, { kind: "image", blobUrl: `dap-blob://blob/test/${blobId}` });
+assert.equal(json.get("memes-v1")[0].useCount, 1);
+console.log("✓ meme-vault helpers");

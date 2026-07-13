@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>짤 저장소</title>
+    <style>
+      :root { color-scheme: dark; --bg:#17181b; --panel:#24262b; --line:#373a42; --text:#f3f4f6; --muted:#9da3ae; --accent:#ffb454; --danger:#ff6b6b; }
+      * { box-sizing:border-box; }
+      html,body { height:100%; margin:0; }
+      body { display:flex; flex-direction:column; background:var(--bg); color:var(--text); font:13px/1.45 system-ui,"Malgun Gothic",sans-serif; user-select:none; }
+      button,input { font:inherit; }
+      button { color:inherit; }
+      #titlebar { display:flex; align-items:center; gap:8px; padding:9px 11px; border-bottom:1px solid var(--line); -webkit-app-region:drag; }
+      #titlebar strong { font-size:14px; }
+      #titlebar .sub { color:var(--muted); font-size:11px; }
+      #titlebar button { margin-left:auto; -webkit-app-region:no-drag; }
+      .icon-btn { border:0; background:transparent; border-radius:7px; padding:5px 8px; cursor:pointer; }
+      .icon-btn:hover { background:var(--panel); }
+      #tools { display:grid; grid-template-columns:1fr auto auto; gap:7px; padding:10px; }
+      input { min-width:0; width:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); padding:8px 10px; outline:none; }
+      input:focus { border-color:var(--accent); }
+      .primary { border:0; border-radius:8px; background:var(--accent); color:#23180a; font-weight:700; padding:8px 11px; cursor:pointer; }
+      .secondary { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 10px; cursor:pointer; }
+      #list { flex:1; overflow:auto; padding:0 10px 10px; display:grid; grid-template-columns:1fr 1fr; align-content:start; gap:9px; }
+      .card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:11px; background:var(--panel); cursor:pointer; }
+      .card:hover { border-color:#626875; }
+      .card.flash { outline:2px solid var(--accent); }
+      .thumb { width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:#0d0e10; cursor:grab; }
+      .info { padding:8px; }
+      .title { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:700; }
+      .tags { min-height:18px; margin-top:3px; color:var(--muted); font-size:11px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+      .stats { color:var(--muted); font-size:10px; margin-top:4px; }
+      .actions { position:absolute; top:5px; right:5px; display:flex; gap:3px; opacity:0; }
+      .card:hover .actions,.card:focus-within .actions { opacity:1; }
+      .actions button { border:0; border-radius:6px; background:rgba(15,16,18,.85); padding:4px 6px; cursor:pointer; }
+      .empty { grid-column:1/-1; padding:65px 24px; color:var(--muted); text-align:center; }
+      footer { display:flex; justify-content:space-between; padding:7px 11px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
+      #toast { position:fixed; left:50%; bottom:32px; transform:translateX(-50%) translateY(8px); max-width:88%; padding:8px 12px; border-radius:9px; background:#30333a; opacity:0; pointer-events:none; transition:.16s; text-align:center; }
+      #toast.show { opacity:1; transform:translateX(-50%); }
+      #toast.error { background:#5a292d; }
+      dialog { width:min(360px,calc(100% - 28px)); border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--text); padding:0; }
+      dialog::backdrop { background:rgba(0,0,0,.65); }
+      form { padding:16px; }
+      form h2 { margin:0 0 12px; font-size:16px; }
+      label { display:block; color:var(--muted); margin:9px 0 5px; }
+      .form-actions { display:flex; justify-content:flex-end; gap:7px; margin-top:14px; }
+      #list::-webkit-scrollbar { width:8px; } #list::-webkit-scrollbar-thumb { background:var(--line); border-radius:8px; }
+    </style>
+  </head>
+  <body>
+    <header id="titlebar"><strong>짤 저장소</strong><span class="sub">클릭 붙여넣기 · 드래그 첨부</span><button class="icon-btn" id="close" aria-label="닫기">✕</button></header>
+    <section id="tools">
+      <input id="search" type="search" placeholder="제목이나 태그 검색 (예: 축하, 퇴근)" autocomplete="off" />
+      <button class="secondary" id="random" title="검색 결과에서 하나 고르기">랜덤</button>
+      <button class="primary" id="add">+ 저장</button>
+    </section>
+    <main id="list"></main>
+    <footer><span id="count">0개</span><span id="usage">0 MB</span></footer>
+    <div id="toast" role="status"></div>
+    <dialog id="editor">
+      <form method="dialog">
+        <h2 id="editorTitle">짤 저장</h2>
+        <label for="name">이름</label><input id="name" maxlength="80" placeholder="예: 완전 축하해" />
+        <label for="tags">태그</label><input id="tags" maxlength="200" placeholder="축하, 박수, 성공" />
+        <div class="form-actions"><button class="secondary" value="cancel">취소</button><button class="primary" id="save" value="default">저장</button></div>
+      </form>
+    </dialog>
+    <script>
+      const dap = window.dapPalette;
+      const list = document.getElementById("list");
+      const search = document.getElementById("search");
+      const editor = document.getElementById("editor");
+      const nameInput = document.getElementById("name");
+      const tagsInput = document.getElementById("tags");
+      const toast = document.getElementById("toast");
+      let items = [];
+      let editingId = null;
+      let toastTimer = 0;
+
+      const text = (value) => String(value || "");
+      const filtered = () => {
+        const terms = search.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+        return items.filter((item) => terms.every((term) => `${item.title} ${item.tags.join(" ")}`.toLowerCase().includes(term)));
+      };
+      function showToast(message, tone) {
+        clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.className = tone === "error" ? "show error" : "show";
+        toastTimer = setTimeout(() => { toast.className = ""; }, 2200);
+      }
+      function button(label, title, handler) {
+        const el = document.createElement("button");
+        el.type = "button"; el.textContent = label; el.title = title;
+        el.addEventListener("click", (event) => { event.stopPropagation(); handler(); });
+        return el;
+      }
+      function render() {
+        const visible = filtered();
+        list.replaceChildren();
+        document.getElementById("count").textContent = `${visible.length}/${items.length}개`;
+        if (!visible.length) {
+          const empty = document.createElement("div"); empty.className = "empty";
+          empty.textContent = items.length ? "검색에 맞는 짤이 없어요." : "이미지를 복사하고 ‘+ 저장’을 눌러 첫 짤을 모아보세요.";
+          list.append(empty); return;
+        }
+        for (const item of visible) {
+          const card = document.createElement("article"); card.className = "card"; card.tabIndex = 0;
+          card.addEventListener("click", () => dap.postMessage({ type:"paste", id:item.id }));
+          card.addEventListener("keydown", (event) => { if (event.key === "Enter") card.click(); });
+          const img = document.createElement("img"); img.className = "thumb"; img.src = item.imageUrl; img.alt = item.title; img.draggable = true;
+          img.addEventListener("dragstart", (event) => { event.preventDefault(); dap.startDragExport(item.imageUrl); });
+          const actions = document.createElement("div"); actions.className = "actions";
+          actions.append(button("수정", `${item.title} 정보 수정`, () => openEditor(item)), button("삭제", `${item.title} 삭제`, () => { if (confirm("이 짤을 삭제할까요?")) dap.postMessage({ type:"delete", id:item.id }); }));
+          const info = document.createElement("div"); info.className = "info";
+          const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
+          const tags = document.createElement("div"); tags.className = "tags"; tags.textContent = item.tags.map((tag) => `#${tag}`).join(" ") || "태그 없음";
+          const stats = document.createElement("div"); stats.className = "stats"; stats.textContent = `${item.useCount}번 사용`;
+          info.append(title, tags, stats); card.append(img, actions, info); list.append(card);
+        }
+      }
+      function openEditor(item = null) {
+        editingId = item?.id || null;
+        document.getElementById("editorTitle").textContent = item ? "짤 정보 수정" : "최근 복사한 이미지 저장";
+        nameInput.value = item?.title || "";
+        tagsInput.value = item?.tags?.join(", ") || "";
+        editor.showModal(); setTimeout(() => nameInput.focus(), 0);
+      }
+      document.getElementById("add").onclick = () => openEditor();
+      document.getElementById("random").onclick = () => {
+        const candidates = filtered();
+        if (!candidates.length) return showToast("고를 짤이 없어요.", "error");
+        const item = candidates[Math.floor(Math.random() * candidates.length)];
+        search.value = item.title; render(); showToast(`오늘의 선택: ${item.title}`);
+      };
+      document.getElementById("save").addEventListener("click", (event) => {
+        event.preventDefault();
+        const payload = { title:nameInput.value, tags:tagsInput.value };
+        dap.postMessage(editingId ? { type:"edit", id:editingId, ...payload } : { type:"addLatest", ...payload });
+        editor.close();
+      });
+      document.getElementById("close").onclick = () => dap.close();
+      search.addEventListener("input", render);
+      dap.onMessage((msg) => {
+        if (msg.type === "state") {
+          items = Array.isArray(msg.items) ? msg.items : [];
+          if (msg.query) search.value = text(msg.query);
+          document.getElementById("usage").textContent = `${((msg.usage?.blobBytes || 0) / 1048576).toFixed(1)} MB`;
+          render();
+        }
+        if (msg.type === "notice") showToast(msg.message, msg.tone);
+        if (msg.type === "pasted") {
+          const card = [...document.querySelectorAll(".card")].find((el) => el.querySelector("img")?.src === items.find((item) => item.id === msg.id)?.imageUrl);
+          if (card) { card.classList.add("flash"); setTimeout(() => card.classList.remove("flash"), 450); }
+        }
+      });
+      dap.postMessage({ type:"ready" });
+    </script>
+  </body>
+</html>
