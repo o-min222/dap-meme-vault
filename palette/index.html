@@ -82,6 +82,11 @@
             </div>
           </div>
           <input id="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp" hidden />
+          <label for="genPrompt">또는 AI로 만들기</label>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:7px">
+            <input id="genPrompt" maxlength="200" placeholder="원하는 짤 설명 (예: 월요일 싫은 고양이)" autocomplete="off" />
+            <button class="secondary" id="generate" type="button">AI 생성</button>
+          </div>
         </section>
         <label for="name">이름</label><input id="name" maxlength="80" placeholder="예: 완전 축하해" />
         <label for="tags">태그</label><input id="tags" maxlength="200" placeholder="축하, 박수, 성공" />
@@ -159,6 +164,7 @@
         previewImage.removeAttribute("src");
         saveButton.disabled = !item;
         document.getElementById("editorTitle").textContent = item ? "짤 정보 수정" : "짤 추가";
+        document.getElementById("genPrompt").value = "";
         nameInput.value = item?.title || "";
         tagsInput.value = item?.tags?.join(", ") || "";
         editor.showModal(); setTimeout(() => nameInput.focus(), 0);
@@ -183,6 +189,12 @@
         fileInput.value = "";
         if (file) attachFile(file);
       });
+      document.getElementById("generate").onclick = () => {
+        const prompt = document.getElementById("genPrompt").value.trim();
+        if (!prompt) return showToast("만들고 싶은 짤을 설명해 주세요.", "error");
+        dap.postMessage({ type:"generate", prompt, title:nameInput.value, tags:tagsInput.value });
+        editor.close();
+      };
       document.getElementById("removeAttachment").onclick = () => {
         selectedFile = null;
         attachmentEmpty.hidden = false;

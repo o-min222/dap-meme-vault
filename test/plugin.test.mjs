@@ -24,16 +24,18 @@ const palette = {
   postMessage(message) { palettePosts.push(message); },
 };
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+const PNG_BYTES_2 = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
 const spoken = [];
+const imageGen = { next: PNG_BYTES, async generate() { return { bytes: this.next, mime: "image/png", name: "gen.png" }; } };
 const ctx = {
   host: {
     bubble: { speak(text) { spoken.push(text); } },
-    imageGen: { async generate() { return { bytes: PNG_BYTES, mime: "image/png", name: "monday-cat.png" }; } },
+    imageGen,
     storage: {
       async getJson(key) { return json.get(key) ?? null; },
       async setJson(key, value) { json.set(key, structuredClone(value)); },
-      // 콘텐츠 해시 흉내: PNG 8바이트(승리)와 9바이트(생성)는 다른 blob이어야 dedup이 안 걸린다.
-      async putBlob(bytes) { return bytes[0] !== 0x89 ? blobId : (bytes.length > 8 ? "c" : "b").repeat(64); },
+      // 콘텐츠 해시 흉내: 길이가 다른 PNG는 서로 다른 blob이어야 dedup이 안 걸린다.
+      async putBlob(bytes) { return bytes[0] !== 0x89 ? blobId : String(bytes.length % 10).repeat(64); },
       async blobUrl(id) { return `dap-blob://blob/test/${id}`; },
       async deleteBlob() {},
       async usage() { return { jsonKeys: json.size, blobBytes: 3 }; },
@@ -71,6 +73,15 @@ assert.match(ack, /만들어볼게/);
 await tick(); await tick(); await tick(); await tick();
 assert.equal(json.get("memes-v1")[0].title, "월요일 출근이 싫은 고양이");
 assert.deepEqual(json.get("memes-v1")[0].tags, ["생성"]);
+assert.match(spoken.at(-1), /다 만들었어/);
+
+// 팔레트의 'AI 생성' 버튼: generate 메시지 → 같은 경로로 생성·저장 (제목/태그는 다이얼로그 값 우선).
+imageGen.next = PNG_BYTES_2;
+paletteMessage({ type: "generate", prompt: "퇴근하고 싶은 강아지 짤", title: "", tags: "퇴근, 강아지" });
+await tick(); await tick(); await tick(); await tick();
+assert.equal(json.get("memes-v1")[0].title, "퇴근하고 싶은 강아지");
+assert.deepEqual(json.get("memes-v1")[0].tags, ["퇴근", "강아지"]);
+assert.ok(palettePosts.some((message) => message.type === "notice" && /만들어볼게/.test(message.message)));
 assert.match(spoken.at(-1), /다 만들었어/);
 
 // imageGen 미지원 호스트(구버전 DAP)에서는 안내만 하고 아무것도 하지 않는다.
