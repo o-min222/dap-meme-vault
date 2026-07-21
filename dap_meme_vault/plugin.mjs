@@ -100,7 +100,7 @@ export function activate(ctx) {
   async function pushState() {
     if (!usablePalette()) return;
     const state = await buildState();
-    palette.postMessage({ type: "state", ...state, query: pendingQuery });
+    palette.postMessage({ type: "state", ...state, query: pendingQuery, generating: generatingInfo });
     pendingQuery = "";
   }
 
@@ -231,19 +231,21 @@ export function activate(ctx) {
   // ack를 돌려주고 백그라운드로 만든 뒤 말풍선/팔레트 알림으로 끝을 알린다. 완성본은 vault에
   // 저장된다. 채팅 커맨드와 팔레트의 'AI 생성' 버튼이 같은 경로를 쓴다.
   const imageGen = ctx.host.imageGen;
-  let generating = false;
+  // 생성 중이면 팔레트가 placeholder 카드를 그리도록 state에 실어 보낸다 (null = 없음).
+  let generatingInfo = null;
 
   function startGeneration(promptText, meta = {}) {
     if (!imageGen) return { ok: false, message: "짤 생성은 DAP 업데이트 후에 쓸 수 있어 (이미지 생성 지원 버전이 필요해)." };
-    if (generating) return { ok: false, message: "지금 다른 짤을 만들고 있어 — 끝나면 다시 말해줘!" };
-    generating = true;
+    if (generatingInfo) return { ok: false, message: "지금 다른 짤을 만들고 있어 — 끝나면 다시 말해줘!" };
+    const title = cleanText(meta.title) || titleFromUtterance(promptText) || "생성된 짤";
+    generatingInfo = { title };
+    void pushState(); // 팔레트가 열려 있으면 즉시 '만드는 중' 카드를 보여준다
     void (async () => {
       try {
         const image = await imageGen.generate(promptText || "재밌는 밈 이미지");
         const bytes = fileBytes(image.bytes);
         const mime = bytes && bytes.byteLength <= MAX_FILE_BYTES ? detectImageMime(bytes) : null;
         if (!bytes || !mime) throw new Error("생성 결과가 저장할 수 있는 이미지가 아니야");
-        const title = cleanText(meta.title) || titleFromUtterance(promptText) || "생성된 짤";
         const tags = parseTags(meta.tags).length ? parseTags(meta.tags) : ["생성"];
         // Serialize the metadata write with the palette's own mutations; `saved` tells us
         // whether it actually landed (enqueue swallows errors into a palette notice).
@@ -257,6 +259,7 @@ export function activate(ctx) {
           }
           saved = true;
         });
+        generatingInfo = null; // 완료 → placeholder 카드가 실제 카드로 바뀐 state를 보낸다
         await pushState();
         const doneMessage = saved ? `'${title}' 짤 다 만들었어! 저장소에 넣어뒀어~` : "짤은 만들었는데 저장에 실패했어…";
         notice(doneMessage, saved ? "success" : "error");
@@ -266,7 +269,10 @@ export function activate(ctx) {
         notice(failMessage, "error");
         ctx.host.bubble?.speak(failMessage);
       } finally {
-        generating = false;
+        if (generatingInfo) {
+          generatingInfo = null; // 실패 경로: placeholder 카드 제거
+          void pushState();
+        }
       }
     })();
     return { ok: true, message: "좋아, 짤 만들어볼게! 1~2분 걸리니까 다 되면 말해줄게~" };

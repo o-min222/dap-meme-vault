@@ -21,11 +21,18 @@
       input { min-width:0; width:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); padding:8px 10px; outline:none; }
       input:focus { border-color:var(--accent); }
       .primary { border:0; border-radius:8px; background:var(--accent); color:#23180a; font-weight:700; padding:8px 11px; cursor:pointer; }
+      .primary.danger { background:var(--danger); color:#2b0c0e; }
       .secondary { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 10px; cursor:pointer; }
       #list { flex:1; overflow:auto; padding:0 10px 10px; display:grid; grid-template-columns:1fr 1fr; align-content:start; gap:9px; }
       .card { position:relative; overflow:hidden; border:1px solid var(--line); border-radius:11px; background:var(--panel); cursor:pointer; }
       .card:hover { border-color:#626875; }
       .card.flash { outline:2px solid var(--accent); }
+      .card.generating { cursor:default; border-style:dashed; border-color:var(--accent); }
+      .gen-thumb { width:100%; aspect-ratio:4/3; display:grid; place-items:center; font-size:30px;
+        background:linear-gradient(100deg,#1c1e22 40%,#2e3138 50%,#1c1e22 60%); background-size:200% 100%;
+        animation:genShimmer 1.3s linear infinite; }
+      @keyframes genShimmer { to { background-position:-200% 0; } }
+      .gen-label { color:var(--accent); font-size:11px; margin-top:3px; }
       .thumb { width:100%; aspect-ratio:4/3; object-fit:cover; display:block; background:#0d0e10; cursor:grab; }
       .info { padding:8px; }
       .title { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-weight:700; }
@@ -66,6 +73,16 @@
     <main id="list"></main>
     <footer><span id="count">0개</span><span id="usage">0 MB</span></footer>
     <div id="toast" role="status"></div>
+    <dialog id="confirmDelete">
+      <form method="dialog">
+        <h2>짤 삭제</h2>
+        <p id="confirmDeleteText" style="margin:0;color:var(--muted)">이 짤을 삭제할까요? 되돌릴 수 없어요.</p>
+        <div class="form-actions">
+          <button class="secondary" value="cancel">취소</button>
+          <button class="primary danger" id="confirmDeleteButton" value="default">삭제</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="editor">
       <form method="dialog">
         <h2 id="editorTitle">짤 저장</h2>
@@ -110,6 +127,7 @@
       const saveButton = document.getElementById("save");
       const toast = document.getElementById("toast");
       let items = [];
+      let generating = null;
       let editingId = null;
       let selectedFile = null;
       let toastTimer = 0;
@@ -135,7 +153,16 @@
         const visible = filtered();
         list.replaceChildren();
         document.getElementById("count").textContent = `${visible.length}/${items.length}개`;
+        if (generating) {
+          const card = document.createElement("article"); card.className = "card generating";
+          const thumb = document.createElement("div"); thumb.className = "gen-thumb"; thumb.textContent = "✨";
+          const info = document.createElement("div"); info.className = "info";
+          const title = document.createElement("div"); title.className = "title"; title.textContent = generating.title || "생성 중인 짤";
+          const label = document.createElement("div"); label.className = "gen-label"; label.textContent = "AI가 만드는 중… (1~2분)";
+          info.append(title, label); card.append(thumb, info); list.append(card);
+        }
         if (!visible.length) {
+          if (generating) return;
           const empty = document.createElement("div"); empty.className = "empty";
           empty.textContent = items.length ? "검색에 맞는 짤이 없어요." : "‘+ 짤 추가’로 첫 짤을 저장해 보세요.";
           list.append(empty); return;
@@ -147,7 +174,7 @@
           const img = document.createElement("img"); img.className = "thumb"; img.src = item.imageUrl; img.alt = item.title; img.draggable = true;
           img.addEventListener("dragstart", (event) => { event.preventDefault(); dap.startDragExport(item.imageUrl); });
           const actions = document.createElement("div"); actions.className = "actions";
-          actions.append(button("수정", `${item.title} 정보 수정`, () => openEditor(item)), button("삭제", `${item.title} 삭제`, () => { if (confirm("이 짤을 삭제할까요?")) dap.postMessage({ type:"delete", id:item.id }); }));
+          actions.append(button("수정", `${item.title} 정보 수정`, () => openEditor(item)), button("삭제", `${item.title} 삭제`, () => openDeleteConfirm(item)));
           const info = document.createElement("div"); info.className = "info";
           const title = document.createElement("div"); title.className = "title"; title.textContent = item.title;
           const tags = document.createElement("div"); tags.className = "tags"; tags.textContent = item.tags.map((tag) => `#${tag}`).join(" ") || "태그 없음";
@@ -182,6 +209,18 @@
         saveButton.disabled = false;
         if (!pasted && !nameInput.value.trim()) nameInput.value = file.name.replace(/\.[^.]+$/u, "");
       }
+      const confirmDelete = document.getElementById("confirmDelete");
+      let pendingDeleteId = null;
+      function openDeleteConfirm(item) {
+        pendingDeleteId = item.id;
+        document.getElementById("confirmDeleteText").textContent = `'${item.title}' 짤을 삭제할까요? 되돌릴 수 없어요.`;
+        confirmDelete.showModal();
+      }
+      document.getElementById("confirmDeleteButton").addEventListener("click", () => {
+        if (pendingDeleteId) dap.postMessage({ type:"delete", id:pendingDeleteId });
+        pendingDeleteId = null;
+      });
+      confirmDelete.addEventListener("close", () => { if (confirmDelete.returnValue !== "default") pendingDeleteId = null; });
       document.getElementById("add").onclick = () => openEditor();
       chooseFile.onclick = () => fileInput.click();
       fileInput.addEventListener("change", () => {
@@ -226,6 +265,7 @@
       dap.onMessage((msg) => {
         if (msg.type === "state") {
           items = Array.isArray(msg.items) ? msg.items : [];
+          generating = msg.generating || null;
           if (msg.query) search.value = text(msg.query);
           document.getElementById("usage").textContent = `${((msg.usage?.blobBytes || 0) / 1048576).toFixed(1)} MB`;
           render();

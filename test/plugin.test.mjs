@@ -26,7 +26,13 @@ const palette = {
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 const PNG_BYTES_2 = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
 const spoken = [];
-const imageGen = { next: PNG_BYTES, async generate() { return { bytes: this.next, mime: "image/png", name: "gen.png" }; } };
+const imageGen = {
+  next: PNG_BYTES,
+  async generate() {
+    await new Promise((resolve) => setTimeout(resolve, 15)); // 실제처럼 오래 걸리는 생성 — placeholder state 관측용
+    return { bytes: this.next, mime: "image/png", name: "gen.png" };
+  },
+};
 const ctx = {
   host: {
     bubble: { speak(text) { spoken.push(text); } },
@@ -70,15 +76,21 @@ assert.deepEqual(json.get("memes-v1")[0].tags, ["성공", "축하"]);
 // AI 짤 생성: 즉시 ack → 백그라운드 생성 → vault 저장 + 말풍선 알림.
 const ack = actions.get("generateMeme")({ text: "월요일 출근이 싫은 고양이 짤 만들어줘" });
 assert.match(ack, /만들어볼게/);
-await tick(); await tick(); await tick(); await tick();
+await tick();
+// 생성 중에는 팔레트 state에 placeholder 카드 정보가 실린다.
+const pendingState = palettePosts.findLast((message) => message.type === "state");
+assert.equal(pendingState.generating?.title, "월요일 출근이 싫은 고양이");
+await new Promise((resolve) => setTimeout(resolve, 40));
 assert.equal(json.get("memes-v1")[0].title, "월요일 출근이 싫은 고양이");
+// 완료 후 state에서는 placeholder가 사라진다.
+assert.equal(palettePosts.findLast((message) => message.type === "state").generating, null);
 assert.deepEqual(json.get("memes-v1")[0].tags, ["생성"]);
 assert.match(spoken.at(-1), /다 만들었어/);
 
 // 팔레트의 'AI 생성' 버튼: generate 메시지 → 같은 경로로 생성·저장 (제목/태그는 다이얼로그 값 우선).
 imageGen.next = PNG_BYTES_2;
 paletteMessage({ type: "generate", prompt: "퇴근하고 싶은 강아지 짤", title: "", tags: "퇴근, 강아지" });
-await tick(); await tick(); await tick(); await tick();
+await new Promise((resolve) => setTimeout(resolve, 40));
 assert.equal(json.get("memes-v1")[0].title, "퇴근하고 싶은 강아지");
 assert.deepEqual(json.get("memes-v1")[0].tags, ["퇴근", "강아지"]);
 assert.ok(palettePosts.some((message) => message.type === "notice" && /만들어볼게/.test(message.message)));
