@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { activate, detectImageMime, parseTags, queryFromUtterance } from "../dap_meme_vault/plugin.mjs";
+import { activate, detectImageMime, parseTags, queryFromUtterance, titleFromUtterance } from "../dap_meme_vault/plugin.mjs";
 
 assert.deepEqual(parseTags("축하, 박수 #축하\n성공"), ["축하", "박수", "성공"]);
 assert.equal(queryFromUtterance("축하 짤 찾아줘"), "축하");
 assert.equal(queryFromUtterance("meme 저장소 열어줘"), "");
+assert.equal(titleFromUtterance("월요일 출근이 싫은 고양이 짤 만들어줘"), "월요일 출근이 싫은 고양이");
+assert.equal(titleFromUtterance("짤 하나 생성해줘"), "");
 assert.equal(detectImageMime(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "image/png");
 assert.equal(detectImageMime(new Uint8Array([1, 2, 3])), null);
 
@@ -21,12 +23,17 @@ const palette = {
   onMessage(callback) { paletteMessage = callback; },
   postMessage(message) { palettePosts.push(message); },
 };
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+const spoken = [];
 const ctx = {
   host: {
+    bubble: { speak(text) { spoken.push(text); } },
+    imageGen: { async generate() { return { bytes: PNG_BYTES, mime: "image/png", name: "monday-cat.png" }; } },
     storage: {
       async getJson(key) { return json.get(key) ?? null; },
       async setJson(key, value) { json.set(key, structuredClone(value)); },
-      async putBlob(bytes) { return bytes[0] === 0x89 ? "b".repeat(64) : blobId; },
+      // 콘텐츠 해시 흉내: PNG 8바이트(승리)와 9바이트(생성)는 다른 blob이어야 dedup이 안 걸린다.
+      async putBlob(bytes) { return bytes[0] !== 0x89 ? blobId : (bytes.length > 8 ? "c" : "b").repeat(64); },
       async blobUrl(id) { return `dap-blob://blob/test/${id}`; },
       async deleteBlob() {},
       async usage() { return { jsonKeys: json.size, blobBytes: 3 }; },
@@ -57,4 +64,21 @@ paletteMessage({ type: "addFile", title: "승리", tags: "성공, 축하", file:
 await tick(); await tick();
 assert.equal(json.get("memes-v1")[0].title, "승리");
 assert.deepEqual(json.get("memes-v1")[0].tags, ["성공", "축하"]);
+
+// AI 짤 생성: 즉시 ack → 백그라운드 생성 → vault 저장 + 말풍선 알림.
+const ack = actions.get("generateMeme")({ text: "월요일 출근이 싫은 고양이 짤 만들어줘" });
+assert.match(ack, /만들어볼게/);
+await tick(); await tick(); await tick(); await tick();
+assert.equal(json.get("memes-v1")[0].title, "월요일 출근이 싫은 고양이");
+assert.deepEqual(json.get("memes-v1")[0].tags, ["생성"]);
+assert.match(spoken.at(-1), /다 만들었어/);
+
+// imageGen 미지원 호스트(구버전 DAP)에서는 안내만 하고 아무것도 하지 않는다.
+const bareActions = new Map();
+activate({
+  ...ctx,
+  host: { ...ctx.host, imageGen: undefined },
+  actions: { registerAction(action) { bareActions.set(action.id, action.callback); } },
+});
+assert.match(bareActions.get("generateMeme")({ text: "짤 만들어줘" }), /업데이트/);
 console.log("✓ meme-vault helpers");

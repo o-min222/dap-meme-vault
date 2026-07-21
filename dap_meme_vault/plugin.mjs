@@ -19,6 +19,15 @@ export function queryFromUtterance(value) {
     .trim();
 }
 
+export function titleFromUtterance(value) {
+  return cleanText(value, 100)
+    .replace(/(짤|밈|meme|저장소|보관함)/giu, " ")
+    .replace(/(만들어\s*줘|만들어|만들|생성해\s*줘|생성해|생성|그려\s*줘|그려|제작해\s*줘|제작)/gu, " ")
+    .replace(/(하나|좀|해\s*줘|줘)/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function detectImageMime(bytes) {
   if (!(bytes instanceof Uint8Array)) return null;
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
@@ -212,6 +221,56 @@ export function activate(ctx) {
     title: "짤 저장소",
     matchers: [{ type: "keyword", patterns: ["짤", "밈", "meme"], priority: 45 }],
     backend: { type: "builtin", handler: "io.github.o-min222.meme_vault.findMeme" },
+  });
+
+  // AI 짤 생성 (ctx.host.imageGen, permission image.generate) — 생성은 1~2분 걸리므로 즉시
+  // ack를 돌려주고 백그라운드로 만든 뒤 말풍선으로 알린다. 완성본은 vault에 저장된다.
+  const imageGen = ctx.host.imageGen;
+  let generating = false;
+
+  ctx.actions.registerAction({
+    id: "generateMeme",
+    callback: (payload) => {
+      const text = cleanText(payload?.text, 200);
+      if (!imageGen) return "짤 생성은 DAP 업데이트 후에 쓸 수 있어 (이미지 생성 지원 버전이 필요해).";
+      if (generating) return "지금 다른 짤을 만들고 있어 — 끝나면 다시 말해줘!";
+      generating = true;
+      void (async () => {
+        try {
+          const image = await imageGen.generate(text || "재밌는 밈 이미지");
+          const bytes = fileBytes(image.bytes);
+          const mime = bytes && bytes.byteLength <= MAX_FILE_BYTES ? detectImageMime(bytes) : null;
+          if (!bytes || !mime) throw new Error("생성 결과가 저장할 수 있는 이미지가 아니야");
+          const title = titleFromUtterance(text) || "생성된 짤";
+          // Serialize the metadata write with the palette's own mutations; `saved` tells us
+          // whether it actually landed (enqueue swallows errors into a palette notice).
+          let saved = false;
+          await enqueue(async () => {
+            const blobId = await storage.putBlob(bytes, { mime, name: cleanText(image.name, 120) || `gen-${Date.now()}.png` });
+            const items = await readItems();
+            if (!items.find((item) => item.blobId === blobId)) {
+              items.unshift({ id: blobId, blobId, title, tags: ["생성"], createdAt: Date.now(), usedAt: 0, useCount: 0 });
+              await writeItems(items);
+            }
+            saved = true;
+          });
+          await pushState();
+          ctx.host.bubble?.speak(saved ? `'${title}' 짤 다 만들었어! 저장소에 넣어뒀어~` : "짤은 만들었는데 저장에 실패했어…");
+        } catch (error) {
+          ctx.host.bubble?.speak(`짤 생성에 실패했어… ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          generating = false;
+        }
+      })();
+      return "좋아, 짤 만들어볼게! 1~2분 걸리니까 다 되면 말해줄게~";
+    },
+  });
+  ctx.commands.addCommand({
+    id: "generateMeme",
+    title: "짤 생성",
+    // findMeme(45)보다 우선 — "…짤 만들어줘"는 열기가 아니라 생성이다.
+    matchers: [{ type: "regex", pattern: "(짤|밈|[Mm]eme)[^\\n]*(만들|생성|그려|제작)", priority: 40 }],
+    backend: { type: "builtin", handler: "io.github.o-min222.meme_vault.generateMeme" },
   });
   ctx.radialMenu.addItem({
     itemId: "memeVault",
